@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>MDAPKR2 Crew Scheduler</title>
+  <style>
+    table { border-collapse: collapse; margin-top: 1em; }
+    th, td { border: 1px solid #999; padding: 4px 8px; text-align: center; }
+    .active { background-color: lightgreen; cursor: pointer; }
+    .inactive { background-color: lightcoral; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>MDAPKR2 Crew Scheduler</h1>
+  <p>Welcome to the serverless scheduler platform.</p>
+
+  <button onclick="fetchData('/crew')">Fetch Crew</button>
+  <button onclick="fetchData('/missions')">Fetch Missions</button>
+  <button onclick="fetchData('/availability')">Fetch Availability</button>
+
+  <div id="output"></div>
+
+  <hr>
+
+  <h3>Add Crew</h3>
+  <form onsubmit="addCrew(event)">
+    <input type="text" placeholder="Crew ID" id="crew_id" required />
+    <input type="text" placeholder="Name" id="name" required />
+    <input type="email" placeholder="Email" id="email" required />
+    <label>Driver: <input type="checkbox" id="driver" /></label>
+    <label>EMT: <input type="checkbox" id="emt" /></label>
+    <label>PARA: <input type="checkbox" id="para" /></label>
+    <button type="submit">Add Crew</button>
+  </form>
+
+  <hr>
+
+  <h3>Add Mission</h3>
+  <form onsubmit="addMission(event)">
+    <input type="text" placeholder="Region" id="mission_region" required />
+    <input type="text" placeholder="Name" id="mission_name" required />
+    <select id="mission_type" required>
+      <option value="">Select Type</option>
+      <option value="ALS">ALS</option>
+      <option value="BLS">BLS</option>
+    </select>
+    <button type="submit">Add Mission</button>
+  </form>
+
+  <hr>
+
+  <h3>Update Availability</h3>
+  <form onsubmit="updateAvailability(event)">
+    <input type="text" placeholder="Crew ID" id="avail_crew_id" required />
+    <input type="text" placeholder="Availability (e.g. Monday, Tuesday)" id="days" />
+    <button type="submit">Update Availability</button>
+  </form>
+
+  <script>
+    const baseUrl = "https://kuql2chywi.execute-api.ap-south-1.amazonaws.com";
+    const pendingUpdates = {};
+
+    async function fetchData(path) {
+      try {
+        const res = await fetch(baseUrl + path, { method: "GET", mode: "cors" });
+        const data = await res.json();
+        if (path === "/missions") renderMissionsTable(data);
+        else renderGenericTable(data);
+      } catch (err) {
+        document.getElementById('output').innerHTML = `<p style="color:red">Error: ${err.message}</p>`;
+      }
+    }
+
+    function renderGenericTable(data) {
+      if (!Array.isArray(data) || data.length === 0) {
+        document.getElementById('output').innerHTML = "<p>No data found.</p>";
+        return;
+      }
+
+      // Specific rendering for crew table
+      const isCrew = data[0] && "crew_id" in data[0] && "name" in data[0];
+
+      if (isCrew) {
+        const header = `<tr><th>Name</th><th>ID</th><th>Email</th><th>EMT</th><th>Driver</th><th>PARA</th></tr>`;
+        const rows = data.map(row => {
+          return `<tr>
+            <td>${row.name || ""}</td>
+            <td>${row.crew_id || ""}</td>
+            <td>${row.email || ""}</td>
+            <td>${row.EMT || ""}</td>
+            <td>${row.Driver || ""}</td>
+            <td>${row.PARA || ""}</td>
+          </tr>`;
+        }).join('');
+        document.getElementById('output').innerHTML = `<table>${header}${rows}</table>`;
+      } else {
+        const keys = Object.keys(data[0]);
+        const header = keys.map(k => `<th>${k}</th>`).join('');
+        const rows = data.map(row => {
+          const cols = keys.map(k => `<td>${row[k] || ''}</td>`).join('');
+          return `<tr>${cols}</tr>`;
+        }).join('');
+        document.getElementById('output').innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+      }
+    }
+
+    function getDateKeys(numDays = 30) {
+      const dates = [];
+      const today = new Date();
+      for (let i = 0; i < numDays; i++) {
+        const d = new Date(today);
+        d.setDate(d.getDate() + i);
+        const label = `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear().toString().slice(-2)}`;
+        dates.push(label);
+      }
+      return dates;
+    }
+
+    function renderMissionsTable(data) {
+      const dates = getDateKeys();
+      const header = `<tr><th>Region</th><th>Name</th><th>Type</th>${dates.map(d => `<th>${d}</th>`).join('')}</tr>`;
+
+      const rows = data.map(mission => {
+        const cells = dates.map(date => {
+          const key = `${mission.name}|${date}`;
+          const status = pendingUpdates[key] !== undefined ? pendingUpdates[key] : (mission[date] || "off");
+          const cls = status === "on" ? "active" : "inactive";
+          const label = status === "on" ? "on" : "";
+          return `<td class="${cls}" onclick="toggleMission('${mission.name}', '${date}', this)">${label}</td>`;
+        }).join('');
+        return `<tr><td>${mission.region}</td><td>${mission.name}</td><td>${mission.type}</td>${cells}</tr>`;
+      });
+
+      document.getElementById('output').innerHTML = `
+        <table>${header}${rows.join('')}</table>
+        <br><button onclick="saveMissionUpdates()">💾 Save Changes</button>
+      `;
+    }
+
+    function toggleMission(name, date, cell) {
+      const key = `${name}|${date}`;
+      const current = pendingUpdates[key] !== undefined ? pendingUpdates[key] : (cell.textContent === "on" ? "on" : "off");
+      const newStatus = current === "on" ? "off" : "on";
+      pendingUpdates[key] = newStatus;
+      cell.className = newStatus === "on" ? "active" : "inactive";
+      cell.textContent = newStatus === "on" ? "on" : "";
+    }
+
+    async function saveMissionUpdates() {
+      const entries = Object.entries(pendingUpdates);
+      if (entries.length === 0) {
+        alert("No changes to save.");
+        return;
+      }
+
+      try {
+        for (const [key, status] of entries) {
+          const [name, date] = key.split("|");
+          await fetch(baseUrl + "/missions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, date, status })
+          });
+        }
+        alert("Changes saved.");
+        Object.keys(pendingUpdates).forEach(k => delete pendingUpdates[k]);
+        fetchData('/missions');
+      } catch (err) {
+        alert("Error saving updates: " + err.message);
+      }
+    }
+
+    async function addCrew(event) {
+      event.preventDefault();
+      const payload = {
+        crew_id: document.getElementById("crew_id").value,
+        name: document.getElementById("name").value,
+        email: document.getElementById("email").value,
+        Driver: document.getElementById("driver").checked ? "yes" : "no",
+        EMT: document.getElementById("emt").checked ? "yes" : "no",
+        PARA: document.getElementById("para").checked ? "yes" : "no"
+      };
+      try {
+        await fetch(baseUrl + "/crew", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        alert("Crew added.");
+        fetchData('/crew');
+      } catch (err) {
+        alert("Error adding crew: " + err.message);
+      }
+    }
+
+    async function addMission(event) {
+      event.preventDefault();
+      const payload = {
+        region: document.getElementById("mission_region").value,
+        name: document.getElementById("mission_name").value,
+        type: document.getElementById("mission_type").value
+      };
+      try {
+        await fetch(baseUrl + "/missions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        alert("Mission added.");
+        fetchData('/missions');
+      } catch (err) {
+        alert("Error adding mission: " + err.message);
+      }
+    }
+
+    async function updateAvailability(event) {
+      event.preventDefault();
+      const payload = {
+        crew_id: document.getElementById("avail_crew_id").value,
+        days: document.getElementById("days").value
+      };
+      try {
+        await fetch(baseUrl + "/availability", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        alert("Availability updated.");
+        fetchData('/availability');
+      } catch (err) {
+        alert("Error updating availability: " + err.message);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,2 @@
+# requirements.txt
+# Leave empty for now unless you use external packages later
