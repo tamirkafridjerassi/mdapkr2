@@ -57,12 +57,24 @@
   </form>
 
   <script>
-    const baseUrl = "https://kuql2chywi.execute-api.ap-south-1.amazonaws.com";
+    let baseUrl = "";
     const pendingUpdates = {};
+
+    async function loadConfigAndStart() {
+      try {
+        const res = await fetch("config.json", { cache: "no-store" });
+        const config = await res.json();
+        if (!config.api_url) throw new Error("Missing 'api_url' in config.json");
+        baseUrl = config.api_url;
+        fetchData('/crew'); // Initial data fetch
+      } catch (err) {
+        document.body.innerHTML = `<h2 style="color:red">Failed to load config.json: ${err.message}</h2>`;
+      }
+    }
 
     async function fetchData(path) {
       try {
-        const res = await fetch(baseUrl + path, { method: "GET", mode: "cors" });
+        const res = await fetch(baseUrl + path);
         const data = await res.json();
         if (path === "/missions") renderMissionsTable(data);
         else renderGenericTable(data);
@@ -77,12 +89,13 @@
         return;
       }
 
-      // Specific rendering for crew table
       const isCrew = data[0] && "crew_id" in data[0] && "name" in data[0];
+      const header = isCrew
+        ? `<tr><th>Name</th><th>ID</th><th>Email</th><th>EMT</th><th>Driver</th><th>PARA</th></tr>`
+        : `<tr>${Object.keys(data[0]).map(k => `<th>${k}</th>`).join('')}</tr>`;
 
-      if (isCrew) {
-        const header = `<tr><th>Name</th><th>ID</th><th>Email</th><th>EMT</th><th>Driver</th><th>PARA</th></tr>`;
-        const rows = data.map(row => {
+      const rows = data.map(row => {
+        if (isCrew) {
           return `<tr>
             <td>${row.name || ""}</td>
             <td>${row.crew_id || ""}</td>
@@ -91,17 +104,12 @@
             <td>${row.Driver || ""}</td>
             <td>${row.PARA || ""}</td>
           </tr>`;
-        }).join('');
-        document.getElementById('output').innerHTML = `<table>${header}${rows}</table>`;
-      } else {
-        const keys = Object.keys(data[0]);
-        const header = keys.map(k => `<th>${k}</th>`).join('');
-        const rows = data.map(row => {
-          const cols = keys.map(k => `<td>${row[k] || ''}</td>`).join('');
-          return `<tr>${cols}</tr>`;
-        }).join('');
-        document.getElementById('output').innerHTML = `<table><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
-      }
+        } else {
+          return `<tr>${Object.values(row).map(v => `<td>${v || ""}</td>`).join('')}</tr>`;
+        }
+      }).join('');
+
+      document.getElementById('output').innerHTML = `<table>${header}${rows}</table>`;
     }
 
     function getDateKeys(numDays = 30) {
@@ -110,8 +118,7 @@
       for (let i = 0; i < numDays; i++) {
         const d = new Date(today);
         d.setDate(d.getDate() + i);
-        const label = `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear().toString().slice(-2)}`;
-        dates.push(label);
+        dates.push(`${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear().toString().slice(-2)}`);
       }
       return dates;
     }
@@ -119,7 +126,6 @@
     function renderMissionsTable(data) {
       const dates = getDateKeys();
       const header = `<tr><th>Region</th><th>Name</th><th>Type</th>${dates.map(d => `<th>${d}</th>`).join('')}</tr>`;
-
       const rows = data.map(mission => {
         const cells = dates.map(date => {
           const key = `${mission.name}|${date}`;
@@ -148,10 +154,7 @@
 
     async function saveMissionUpdates() {
       const entries = Object.entries(pendingUpdates);
-      if (entries.length === 0) {
-        alert("No changes to save.");
-        return;
-      }
+      if (entries.length === 0) return alert("No changes to save.");
 
       try {
         for (const [key, status] of entries) {
@@ -231,6 +234,9 @@
         alert("Error updating availability: " + err.message);
       }
     }
+
+    // Kick things off
+    loadConfigAndStart();
   </script>
 </body>
 </html>
